@@ -4,3 +4,4 @@ dist
 *.local
 .env
 *.mp4
+gcp-service-account-key.json

@@ -1,0 +1,67 @@
+name: Deploy GrantMatch AI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'grantmatch-ai/**'
+      - '.github/workflows/cloud-run.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      REGION: ${{ secrets.GCP_REGION }}
+      REPOSITORY: grantmatch-ai
+      FRONTEND_SERVICE: grantmatch-frontend
+      BACKEND_SERVICE: grantmatch-backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+
+      - name: Build backend image
+        run: |
+          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/grantmatch-backend:${{ github.sha }} ./grantmatch-ai/backend
+
+      - name: Build frontend image
+        run: |
+          docker build --build-arg VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }} -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/grantmatch-frontend:${{ github.sha }} ./grantmatch-ai/frontend
+
+      - name: Push images
+        run: |
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/grantmatch-backend:${{ github.sha }}
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/grantmatch-frontend:${{ github.sha }}
+
+      - name: Deploy backend
+        run: |
+          gcloud run deploy $BACKEND_SERVICE \
+            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/grantmatch-backend:${{ github.sha }} \
+            --region $REGION \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-secrets OPENAI_API_KEY=OPENAI_API_KEY:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX=PINECONE_INDEX:latest
+
+      - name: Deploy frontend
+        run: |
+          gcloud run deploy $FRONTEND_SERVICE \
+            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/grantmatch-frontend:${{ github.sha }} \
+            --region $REGION \
+            --platform managed \
+            --allow-unauthenticated
